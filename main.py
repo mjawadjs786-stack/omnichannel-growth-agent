@@ -11,11 +11,11 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
 
-GMAIL_USER = os.environ.get("GMAIL_USER", "")
-GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD", "")
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-PIN_TOKEN = os.environ.get("PINTEREST_ACCESS_TOKEN", "")
-PIN_ENV = os.environ.get("PINTEREST_ENV", "production").lower()
+GMAIL_USER = os.environ.get("GMAIL_USER", "").strip()
+GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+PIN_TOKEN = os.environ.get("PINTEREST_ACCESS_TOKEN", "").strip()
+PIN_ENV = os.environ.get("PINTEREST_ENV", "production").lower().strip()
 
 STATE_FILE = "active_product.json"
 PENDING_FILE = "pending_pin.json"
@@ -26,16 +26,33 @@ BANNED = [
     "pirated", "crack", "hack", "scam", "crypto pump", "forex signals"
 ]
 
+def ask_gemini(prompt: str) -> str:
+    client = genai.Client(api_key=GEMINI_KEY)
+    candidates = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    try:
+        available = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower()]
+        for m in available:
+            if m not in candidates:
+                candidates.insert(0, m)
+    except Exception:
+        pass
+    last_err = None
+    for model_name in candidates:
+        try:
+            res = client.models.generate_content(model=model_name, contents=prompt)
+            return res.text.strip()
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"All Gemini models failed. Last error: {last_err}")
+
 def is_halal_safe(text: str) -> bool:
     low = text.lower()
     if any(w in low for w in BANNED):
         return False
-    client = genai.Client(api_key=GEMINI_KEY)
-    res = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=f"Is this 100% Halal, legal, ethical, and safe (no gambling, riba, alcohol, adult/immodest content, or scams)? Reply ONLY SAFE or BLOCKED.\n\n{text}"
+    verdict = ask_gemini(
+        f"Is this 100% Halal, legal, ethical, and safe (no gambling, riba, alcohol, adult/immodest content, or scams)? Reply ONLY SAFE or BLOCKED.\n\n{text}"
     )
-    return res.text.strip().upper().startswith("SAFE")
+    return verdict.upper().startswith("SAFE")
 
 def send_email(subject: str, body: str, attachments: list = None):
     msg = EmailMessage()
@@ -96,12 +113,10 @@ def get_product():
             return prod
         return None
 
-    client = genai.Client(api_key=GEMINI_KEY)
-    res = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents='Suggest 1 trending, high-demand, 100% Halal digital product (Notion template, AI prompt pack, study planner, or checklist) for Pinterest. Return JSON ONLY: {"name":"...","audience":"...","why":"...","link":"https://payhip.com"}'
+    raw = ask_gemini(
+        'Suggest 1 trending, high-demand, 100% Halal digital product (Notion template, AI prompt pack, study planner, or checklist) for Pinterest. Return JSON ONLY: {"name":"...","audience":"...","why":"...","link":"https://payhip.com"}'
     )
-    raw = res.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     prop = json.loads(raw)
     prop["approved"] = False
     if not is_halal_safe(json.dumps(prop)):
@@ -169,6 +184,8 @@ def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: s
 
 def main():
     print("Starting Autonomous Pinterest Growth & Sales Agent...")
+    if not GEMINI_KEY or not GMAIL_USER or not GMAIL_PASS:
+        raise RuntimeError(f"Missing secret! GEMINI_KEY={bool(GEMINI_KEY)}, GMAIL_USER={bool(GMAIL_USER)}, GMAIL_PASS={bool(GMAIL_PASS)}")
     product = get_product()
     if not product:
         print("Waiting for product approval via Gmail.")
@@ -203,12 +220,10 @@ def main():
                 os.remove(PENDING_FILE)
                 return
 
-    client = genai.Client(api_key=GEMINI_KEY)
-    res = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=f'Create a viral Pinterest Pin for this Halal digital product: {json.dumps(product)}. Return JSON ONLY: {{"board":"2-4 word board","headline":"4-6 word image headline","subtext":"5-7 word callout","title":"SEO title under 90 chars","description":"SEO description + hashtags under 450 chars","link":"{product.get("link", "https://payhip.com")}"}}'
+    raw = ask_gemini(
+        f'Create a viral Pinterest Pin for this Halal digital product: {json.dumps(product)}. Return JSON ONLY: {{"board":"2-4 word board","headline":"4-6 word image headline","subtext":"5-7 word callout","title":"SEO title under 90 chars","description":"SEO description + hashtags under 450 chars","link":"{product.get("link", "https://payhip.com")}"}}'
     )
-    raw = res.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     draft = json.loads(raw)
     if not is_halal_safe(json.dumps(draft)):
         print("Blocked by ethics check.")
@@ -218,11 +233,10 @@ def main():
         json.dump(draft, f)
     send_email(
         "PIN-APPROVAL: Review Your 3 New Pinterest Pin Designs",
-        f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE', or 'REJECT'.",
-        imgs
-    )
-    print("Sent 3 Pin designs to Gmail for approval!")
-
-if __name__ == "__main__":
-    main()
-    
+f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE', or 'REJECT'.",
+imgs
+)
+print("Sent 3 Pin designs to Gmail for approval!")
+if name == "main":
+main()
+        
