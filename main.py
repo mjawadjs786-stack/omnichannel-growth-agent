@@ -53,7 +53,6 @@ def is_halal_safe(text: str) -> bool:
         f"Is this 100% Halal, legal, ethical, and safe (no gambling, riba, alcohol, adult/immodest content, or scams)? Reply ONLY SAFE or BLOCKED.\n\n{text}"
     )
     return verdict.upper().startswith("SAFE")
-
 def send_email(subject: str, body: str, attachments: list = None):
     msg = EmailMessage()
     msg["From"] = GMAIL_USER
@@ -64,15 +63,12 @@ def send_email(subject: str, body: str, attachments: list = None):
         if os.path.exists(path):
             with open(path, "rb") as f:
                 msg.add_attachment(f.read(), maintype="image", subtype="png", filename=os.path.basename(path))
-    with smtplib.SMTP_SSL("://gmail.com", 465) as smtp:
+    with smtplib.SMTP_SSL("smtp" + ".gmail.com", 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_PASS)
         smtp.send_message(msg)
 
 def check_latest_command(subject_filter: str):
-    mail = imaplib.IMAP4_SSL("://gmail.com")
-    mail.login(GMAIL_USER, GMAIL_PASS)
-    mail.select("inbox")
-    _, data = mail.search(None, f'(SUBJECT "{subject_filter}")')
+    mail = imaplib.IMAP4_SSL("imap" + ".gmail.com")
     raw_ids = data.pop(0) if data else b""
     ids = raw_ids.split()
     if not ids:
