@@ -237,6 +237,6 @@ f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['descrip
 imgs
 )
 print("Sent 3 Pin designs to Gmail for approval!")
-if name == "main":
+if __name__ == "__main__": main()
 main()
         
