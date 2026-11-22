@@ -1,0 +1,40 @@
+name: Pinterest Autonomous Growth & Sales Agent
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-pinterest-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Pinterest Growth & Sales Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_ENV: ${{ secrets.PINTEREST_ENV }}
+        run: python main.py
+
+      - name: Save agent state back to repo
+        run: |
+          git config user.name "Pinterest-Growth-Bot"
+          git config user.email "bot@://github.com"
+          git add -A
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update agent state" && git push)
