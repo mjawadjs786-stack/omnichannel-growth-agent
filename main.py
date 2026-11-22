@@ -10,13 +10,11 @@ from skills.pinterest_publisher import publish_pin
 PENDING_FILE = "pending_pin.json"
 
 def run_agent():
-    # Step 1: Ensure we have an approved Halal digital product
     product = get_or_research_product()
     if not product:
         print("Waiting for user approval on product proposal email (PIN-PRODUCT-PROPOSAL).")
         return
 
-    # Step 2: Check if a Pin draft is already awaiting Gmail approval
     if os.path.exists(PENDING_FILE):
         with open(PENDING_FILE) as f:
             draft = json.load(f)
@@ -34,7 +32,7 @@ def run_agent():
             print("Regenerating fresh Pin draft...")
         else:
             choice = 1
-            for n in:
+            for n in (1, 2, 3):
                 if f"APPROVE {n}" in upper:
                     choice = n
                     break
@@ -53,7 +51,6 @@ def run_agent():
                 os.remove(PENDING_FILE)
                 return
 
-    # Step 3: Generate a brand-new high-CTR Pinterest Pin draft
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     prompt = f"""Create a viral, SEO-optimized Pinterest Pin concept promoting this Halal digital product:
 {json.dumps(product)}
@@ -99,3 +96,4 @@ Reply to this email with:
 
 if __name__ == "__main__":
     run_agent()
+    
