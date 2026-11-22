@@ -66,9 +66,11 @@ def send_email(subject: str, body: str, attachments: list = None):
     with smtplib.SMTP_SSL("smtp" + ".gmail.com", 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_PASS)
         smtp.send_message(msg)
-
 def check_latest_command(subject_filter: str):
     mail = imaplib.IMAP4_SSL("imap" + ".gmail.com")
+    mail.login(GMAIL_USER, GMAIL_PASS)
+    mail.select("inbox")
+    _, data = mail.search(None, f'(SUBJECT "{subject_filter}")')
     raw_ids = data.pop(0) if data else b""
     ids = raw_ids.split()
     if not ids:
