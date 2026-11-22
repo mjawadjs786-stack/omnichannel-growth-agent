@@ -45,3 +45,4 @@ def check_latest_command(subject_filter: str):
         body = raw.get_payload(decode=True).decode(errors="ignore")
     mail.logout()
     return body.strip()
+    
