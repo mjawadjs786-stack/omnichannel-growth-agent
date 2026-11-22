@@ -128,34 +128,75 @@ def get_product():
     return None
 
 def make_pins(headline: str, subtext: str) -> list:
+    from io import BytesIO
+    client = genai.Client(api_key=GEMINI_KEY)
     styles = [
-        "minimalist aesthetic flatlay workspace, warm lighting, no text",
-        "modern sleek productivity dashboard mockup, high contrast, no text",
-        "clean pastel aesthetic digital planner on tablet, studio light, no text"
+        "Luxury warm beige and gold aesthetic desk flatlay with iPad showing clean Notion habit tracker dashboard, soft sunlight shadows, editorial Pinterest photography, no text",
+        "Sleek dark emerald and cream minimalist workspace with laptop displaying modern digital planner layout, warm ambient lamp light, high-end product mockup, no text",
+        "Soft sage green and ivory aesthetic study table with tablet, open journal, and coffee cup, bright airy natural lighting, viral Pinterest aesthetic, no text"
+    ]
+    palettes = [
+        {"card": (20, 18, 16, 225), "title": (255, 222, 115), "sub": (245, 240, 230), "btn": (218, 165, 32), "btn_txt": (15, 15, 15)},
+        {"card": (12, 28, 24, 230), "title": (255, 255, 255), "sub": (200, 235, 220), "btn": (46, 204, 113), "btn_txt": (10, 20, 15)},
+        {"card": (252, 249, 242, 238), "title": (28, 38, 32), "sub": (75, 85, 80), "btn": (34, 95, 68), "btn_txt": (255, 255, 255)}
     ]
     paths = []
     for i, st in enumerate(styles, start=1):
-        p = urllib.parse.quote(f"{headline}, {st}")
-        url = f"https://pollinations.ai{p}?width=1000&height=1500&nologo=true&seed={i*33}"
         out = f"pin_option_{i}.png"
+        img = None
         try:
-            r = requests.get(url, timeout=30)
-            with open(out, "wb") as f:
-                f.write(r.content)
-            img = Image.open(out).convert("RGB").resize((1000, 1500))
+            res = client.models.generate_content(
+                model="gemini-2.5-flash-image",
+                contents=f"Vertical 2:3 Pinterest aesthetic background photo: {headline}. {st}"
+            )
+            for part in res.candidates.pop(0).content.parts:
+                if getattr(part, "inline_data", None):
+                    img = Image.open(BytesIO(part.inline_data.data)).convert("RGB").resize((1000, 1500))
+                    break
         except Exception:
-            img = Image.new("RGB", (1000, 1500), color=(25, 30, 45))
+            img = None
+
+        if img is None:
+            try:
+                p = urllib.parse.quote(f"{headline}, {st}")
+                base_img_url = "https://image" + ".pollinations.ai/prompt/"
+                url = f"{base_img_url}{p}?width=1000&height=1500&model=flux&nologo=true&seed={i*77}"
+                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=45)
+                if r.status_code == 200 and len(r.content) > 10000:
+                    img = Image.open(BytesIO(r.content)).convert("RGB").resize((1000, 1500))
+            except Exception:
+                img = None
+
+        if img is None:
+            img = Image.new("RGB", (1000, 1500), color=(32, 42, 38))
+            grad = ImageDraw.Draw(img)
+            for y in range(1500):
+                c = int(28 + (y / 1500) * 35)
+                grad.line([(0, y), (1000, y)], fill=(c, c + 12, c + 8))
+
+        pal = palettes.pop(0)
         draw = ImageDraw.Draw(img, "RGBA")
-        draw.rectangle([(60, 120), (940, 560)], fill=(15, 15, 20, 215))
-        f_big = ImageFont.load_default(size=56)
-        f_sub = ImageFont.load_default(size=32)
-        wrapped = "\n".join(textwrap.wrap(headline.upper(), width=22))
-        draw.multiline_text((100, 155), wrapped, fill=(255, 230, 80), font=f_big, spacing=12)
-        draw.text((100, 470), subtext[:42], fill=(255, 255, 255), font=f_sub)
+        draw.rounded_rectangle([(65, 760), (935, 1410)], radius=36, fill=pal["card"])
+
+        try:
+            f_tag = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
+            f_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 58)
+            f_sub = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 34)
+            f_btn = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+        except Exception:
+            f_tag = f_big = f_sub = f_btn = ImageFont.load_default(size=42)
+
+        draw.text((115, 805), "DIGITAL TEMPLATE  •  INSTANT DOWNLOAD", fill=pal["btn"], font=f_tag)
+        wrapped_title = "\n".join(textwrap.wrap(headline.upper(), width=21)[:3])
+        draw.multiline_text((115, 860), wrapped_title, fill=pal["title"], font=f_big, spacing=14)
+        wrapped_sub = "\n".join(textwrap.wrap(subtext, width=38)[:3])
+        draw.multiline_text((115, 1115), wrapped_sub, fill=pal["sub"], font=f_sub, spacing=10)
+        draw.rounded_rectangle([(115, 1280), (620, 1365)], radius=42, fill=pal["btn"])
+        draw.text((160, 1303), "GET INSTANT ACCESS  →", fill=pal["btn_txt"], font=f_btn)
+
         img.save(out)
         paths.append(out)
     return paths
-
 def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: str):
     base = "https://pinterest.com" if PIN_ENV == "sandbox" else "https://pinterest.com"
     headers = {"Authorization": f"Bearer {PIN_TOKEN}", "Content-Type": "application/json"}
