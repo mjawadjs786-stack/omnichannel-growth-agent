@@ -78,7 +78,7 @@ def check_latest_command(subject_filter: str):
         return None
     _, msg_data = mail.fetch(ids.pop(), "(RFC822)")
     first_part = msg_data.pop(0)
-    raw = email.message_from_bytes(first_part.pop())
+    raw = email.message_from_bytes(first_part[-1])
     body = ""
     if raw.is_multipart():
         for part in raw.walk():
