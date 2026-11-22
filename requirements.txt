@@ -1,0 +1,6 @@
+google-genai
+requests
+pillow
+edge-tts
+pytrends
+python-dotenv
