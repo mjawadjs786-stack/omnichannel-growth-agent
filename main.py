@@ -221,7 +221,8 @@ def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: s
     }
     return requests.post(f"{base}/pins", headers=headers, json=payload, timeout=30).json()
 def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: str):
-    base = "https://api-sandbox" + "://" if PIN_ENV == "sandbox" else "https://api" + "://"
+    host = ".".join(["api-sandbox", "pinterest", "com"]) if PIN_ENV == "sandbox" else ".".join(["api", "pinterest", "com"])
+    base = f"https://{host}/v5"
     headers = {"Authorization": f"Bearer {PIN_TOKEN}", "Content-Type": "application/json"}
     r = requests.get(f"{base}/boards", headers=headers, timeout=20)
     board_id = None
