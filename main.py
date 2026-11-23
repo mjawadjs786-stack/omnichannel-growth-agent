@@ -1,11 +1,14 @@
 import os
 import json
-import base64
+import time
 import imaplib
 import smtplib
 import email
 import textwrap
 import urllib.parse
+import xml.sax.saxutils as sax
+from io import BytesIO
+from datetime import datetime, timezone
 from email.message import EmailMessage
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -14,11 +17,12 @@ from google import genai
 GMAIL_USER = os.environ.get("GMAIL_USER", "").strip()
 GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-PIN_TOKEN = os.environ.get("PINTEREST_ACCESS_TOKEN", "").strip()
-PIN_ENV = os.environ.get("PINTEREST_ENV", "production").lower().strip()
+REPO_OWNER = os.environ.get("REPO_OWNER", "").strip()
+REPO_NAME = os.environ.get("REPO_NAME", "omnichannel-growth-agent").strip()
 
 STATE_FILE = "active_product.json"
 PENDING_FILE = "pending_pin.json"
+HISTORY_FILE = "docs/pins_history.json"
 
 BANNED = [
     "gambling", "casino", "betting", "riba", "interest loan", "usury",
@@ -53,6 +57,7 @@ def is_halal_safe(text: str) -> bool:
         f"Is this 100% Halal, legal, ethical, and safe (no gambling, riba, alcohol, adult/immodest content, or scams)? Reply ONLY SAFE or BLOCKED.\n\n{text}"
     )
     return verdict.upper().startswith("SAFE")
+
 def send_email(subject: str, body: str, attachments: list = None):
     msg = EmailMessage()
     msg["From"] = GMAIL_USER
@@ -63,11 +68,14 @@ def send_email(subject: str, body: str, attachments: list = None):
         if os.path.exists(path):
             with open(path, "rb") as f:
                 msg.add_attachment(f.read(), maintype="image", subtype="png", filename=os.path.basename(path))
-    with smtplib.SMTP_SSL("smtp" + ".gmail.com", 465) as smtp:
+    smtp_host = ".".join(["smtp", "gmail", "com"])
+    with smtplib.SMTP_SSL(smtp_host, 465) as smtp:
         smtp.login(GMAIL_USER, GMAIL_PASS)
         smtp.send_message(msg)
+
 def check_latest_command(subject_filter: str):
-    mail = imaplib.IMAP4_SSL("imap" + ".gmail.com")
+    imap_host = ".".join(["imap", "gmail", "com"])
+    mail = imaplib.IMAP4_SSL(imap_host)
     mail.login(GMAIL_USER, GMAIL_PASS)
     mail.select('"[Gmail]/All Mail"')
     _, data = mail.search(None, f'(SUBJECT "{subject_filter}")')
@@ -111,8 +119,9 @@ def get_product():
             return prod
         return None
 
+    default_link = "https://" + ".".join(["payhip", "com"])
     raw = ask_gemini(
-        'Suggest 1 trending, high-demand, 100% Halal digital product (Notion template, AI prompt pack, study planner, or checklist) for Pinterest. Return JSON ONLY: {"name":"...","audience":"...","why":"...","link":"https://payhip.com"}'
+        f'Suggest 1 trending, high-demand, 100% Halal digital product (Notion template, AI prompt pack, study planner, or checklist) for Pinterest. Return JSON ONLY: {{"name":"...","audience":"...","why":"...","link":"{default_link}"}}'
     )
     raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     prop = json.loads(raw)
@@ -128,7 +137,6 @@ def get_product():
     return None
 
 def make_pins(headline: str, subtext: str) -> list:
-    from io import BytesIO
     client = genai.Client(api_key=GEMINI_KEY)
     styles = [
         "Luxury warm beige and gold aesthetic desk flatlay with iPad showing clean Notion habit tracker dashboard, soft sunlight shadows, editorial Pinterest photography, no text",
@@ -159,8 +167,8 @@ def make_pins(headline: str, subtext: str) -> list:
         if img is None:
             try:
                 p = urllib.parse.quote(f"{headline}, {st}")
-                base_img_url = "https://image" + ".pollinations.ai/prompt/"
-                url = f"{base_img_url}{p}?width=1000&height=1500&model=flux&nologo=true&seed={i*77}"
+                img_host = ".".join(["image", "pollinations", "ai"])
+                url = f"https://{img_host}/prompt/{p}?width=1000&height=1500&model=flux&nologo=true&seed={i*77}"
                 r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=45)
                 if r.status_code == 200 and len(r.content) > 10000:
                     img = Image.open(BytesIO(r.content)).convert("RGB").resize((1000, 1500))
@@ -197,127 +205,118 @@ def make_pins(headline: str, subtext: str) -> list:
         img.save(out)
         paths.append(out)
     return paths
+
 def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: str):
-    base = "https://pinterest.com" if PIN_ENV == "sandbox" else "https://pinterest.com"
-    headers = {"Authorization": f"Bearer {PIN_TOKEN}", "Content-Type": "application/json"}
-    r = requests.get(f"{base}/boards", headers=headers, timeout=20)
-    board_id = None
-    if r.status_code == 200:
-        for b in r.json().get("items", []):
-            if b.get("name", "").lower() == board_name.lower():
-                board_id = b.get("id")
-                break
-    if not board_id:
-        cr = requests.post(f"{base}/boards", headers=headers, json={"name": board_name, "privacy": "PUBLIC"}, timeout=20)
-        board_id = cr.json().get("id")
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    payload = {
-        "board_id": board_id,
+    os.makedirs("docs/images", exist_ok=True)
+    ts = int(time.time())
+    dest_img = f"docs/images/pin_{ts}.png"
+    with open(image_path, "rb") as src, open(dest_img, "wb") as dst:
+        dst.write(src.read())
+
+    raw_host = ".".join(["raw", "githubusercontent", "com"])
+    img_url = f"https://{raw_host}/{REPO_OWNER}/{REPO_NAME}/main/{dest_img}"
+    pub_date = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE) as f:
+            history = json.load(f)
+    history.insert(0, {
+        "guid": str(ts),
         "title": title[:100],
         "description": desc[:500],
         "link": link,
-        "media_source": {"source_type": "image_base64", "content_type": "image/png", "data": b64}
-    }
-    return requests.post(f"{base}/pins", headers=headers, json=payload, timeout=30).json()
-def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: str):
-    host = ".".join(["api-sandbox", "pinterest", "com"]) if PIN_ENV == "sandbox" else ".".join(["api", "pinterest", "com"])
-    base = f"https://{host}/v5"
-    headers = {"Authorization": f"Bearer {PIN_TOKEN}", "Content-Type": "application/json"}
-    r = requests.get(f"{base}/boards", headers=headers, timeout=20)
-    board_id = None
-    if r.status_code == 200:
-        for b in r.json().get("items", []):
-            if b.get("name", "").lower() == board_name.lower():
-                board_id = b.get("id")
-                break
-    if not board_id:
-        cr = requests.post(f"{base}/boards", headers=headers, json={"name": board_name, "privacy": "PUBLIC"}, timeout=20)
-        cr_json = cr.json()
-        print("Board creation response:", cr_json)
-        board_id = cr_json.get("id")
-    if not board_id:
-        raise RuntimeError(f"Could not get/create Pinterest board. API response: {r.text}")
+    "image_url": img_url,
+"pub_date": pub_date
+})
+history = history[:25]
+with open(HISTORY_FILE, "w") as f:
+json.dump(history, f, indent=2)
+items_xml = []
+for item in history:
+items_xml.append(f"""    
+{sax.escape(item['title'])}
+{sax.escape(item['link'])}
+{item['guid']}
+{item['pub_date']}
+{sax.escape(item['description'])}
 
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    payload = {
-        "board_id": board_id,
-        "title": title[:100],
-        "description": desc[:500],
-        "link": link,
-        "media_source": {"source_type": "image_base64", "content_type": "image/png", "data": b64}
-    }
-    res = requests.post(f"{base}/pins", headers=headers, json=payload, timeout=30)
-    res_json = res.json()
-    print("Pinterest API status:", res.status_code, res_json)
-    if res.status_code not in (200, 201):
-        raise RuntimeError(f"Pinterest publish failed ({res.status_code}): {res_json}")
-    return res_json
+""")
+rss = f"""
 
+
+Autonomous Halal Digital Products
+{sax.escape(link)}
+Curated Digital Templates & Productivity Tools
+{chr(10).join(items_xml)}
+
+"""
+with open("docs/feed.xml", "w", encoding="utf-8") as f:
+f.write(rss)
+feed_url = f"https://{raw_host}/{REPO_OWNER}/{REPO_NAME}/main/docs/feed.xml"
+print("SUCCESS! Published to GitHub RSS Feed:", feed_url)
+return {"rss_feed_url": feed_url, "image_url": img_url}
 def main():
-    print("Starting Autonomous Pinterest Growth & Sales Agent...")
-    if not GEMINI_KEY or not GMAIL_USER or not GMAIL_PASS or not PIN_TOKEN:
-        raise RuntimeError(f"Missing secret! GEMINI_KEY={bool(GEMINI_KEY)}, GMAIL_USER={bool(GMAIL_USER)}, GMAIL_PASS={bool(GMAIL_PASS)}, PIN_TOKEN={bool(PIN_TOKEN)}")
-    product = get_product()
-    if not product:
-        print("Waiting for product approval via Gmail.")
-        return
+print("Starting Autonomous Pinterest Growth & Sales Agent...")
+if not GEMINI_KEY or not GMAIL_USER or not GMAIL_PASS:
+raise RuntimeError(f"Missing secret! GEMINI_KEY={bool(GEMINI_KEY)}, GMAIL_USER={bool(GMAIL_USER)}, GMAIL_PASS={bool(GMAIL_PASS)}")
+product = get_product()
+if not product:
+print("Waiting for product approval via Gmail.")
+return
 
-    if os.path.exists(PENDING_FILE):
-        with open(PENDING_FILE) as f:
-            draft = json.load(f)
-        reply = check_latest_command("PIN-APPROVAL")
-        if not reply:
-            print("Waiting for APPROVE 1/2/3 reply in Gmail.")
-            return
-        clean_lines = []
-        for line in reply.splitlines():
-            if line.strip().startswith(">") or (line.strip().startswith("On ") and "wrote:" in line):
-                break
-            if line.strip():
-                clean_lines.append(line.strip())
-        up = " ".join(clean_lines).upper()
-        print("Detected Gmail reply:", up)
-
-        if "SKIP" in up or "CANCEL" in up:
-            os.remove(PENDING_FILE)
-            print("Draft skipped.")
-            return
-        if "REGENERATE" in up:
-            os.remove(PENDING_FILE)
-            print("Regenerating fresh Pin draft...")
-        else:
-            choice = 1
-            for n in (1, 2, 3):
-                if f"APPROVE {n}" in up:
-                    choice = n
-                    break
-            if "APPROVE" in up:
-                img = f"pin_option_{choice}.png"
-                if not os.path.exists(img):
-                    make_pins(draft["headline"], draft["subtext"])
-                res = publish_pin(img, draft["title"], draft["description"], draft["link"], draft["board"])
-                print("SUCCESS! Published Pin to Pinterest:", res)
-                os.remove(PENDING_FILE)
-                return
-
-    raw = ask_gemini(
-        f'Create a viral Pinterest Pin for this Halal digital product: {json.dumps(product)}. Return JSON ONLY: {{"board":"2-4 word board","headline":"4-6 word image headline","subtext":"5-7 word callout","title":"SEO title under 90 chars","description":"SEO description + hashtags under 450 chars","link":"{product.get("link", "https://payhip.com")}"}}'
-    )
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    draft = json.loads(raw)
-    if not is_halal_safe(json.dumps(draft)):
-        print("Blocked by ethics check.")
-        return
-    imgs = make_pins(draft["headline"], draft["subtext"])
-    with open(PENDING_FILE, "w") as f:
-        json.dump(draft, f)
-    send_email(
-        "PIN-APPROVAL: Review Your 3 New Pinterest Pin Designs",
-        f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE' for new designs, or 'SKIP' to discard.",
-        imgs
-    )
-    print("Sent 3 Pin designs to Gmail for approval!")
-
-if __name__ == "__main__": main()
+if os.path.exists(PENDING_FILE):
+with open(PENDING_FILE) as f:
+draft = json.load(f)
+reply = check_latest_command("PIN-APPROVAL")
+if not reply:
+print("Waiting for APPROVE 1/2/3 reply in Gmail.")
+return
+clean_lines = []
+for line in reply.splitlines():
+if line.strip().startswith(">") or (line.strip().startswith("On ") and "wrote:" in line):
+break
+if line.strip():
+clean_lines.append(line.strip())
+up = " ".join(clean_lines).upper()
+print("Detected Gmail reply:", up)
+if "SKIP" in up or "CANCEL" in up:
+os.remove(PENDING_FILE)
+print("Draft skipped.")
+return
+if "REGENERATE" in up:
+os.remove(PENDING_FILE)
+print("Regenerating fresh Pin draft...")
+else:
+choice = 1
+for n in (1, 2, 3):
+if f"APPROVE {n}" in up:
+choice = n
+break
+if "APPROVE" in up:
+img = f"pin_option_{choice}.png"
+if not os.path.exists(img):
+make_pins(draft["headline"], draft["subtext"])
+res = publish_pin(img, draft["title"], draft["description"], draft["link"], draft["board"])
+print("Published Pin to GitHub RSS Feed:", res)
+os.remove(PENDING_FILE)
+return
+default_link = "https://" + ".".join(["payhip", "com"])
+raw = ask_gemini(
+f'Create a viral Pinterest Pin for this Halal digital product: {json.dumps(product)}. Return JSON ONLY: {{"board":"2-4 word board","headline":"4-6 word image headline","subtext":"5-7 word callout","title":"SEO title under 90 chars","description":"SEO description + hashtags under 450 chars","link":"{product.get("link", default_link)}"}}'
+)
+raw = raw.removeprefix("json").removeprefix("").removesuffix("```").strip()
+draft = json.loads(raw)
+if not is_halal_safe(json.dumps(draft)):
+print("Blocked by ethics check.")
+return
+imgs = make_pins(draft["headline"], draft["subtext"])
+with open(PENDING_FILE, "w") as f:
+json.dump(draft, f)
+send_email(
+"PIN-APPROVAL: Review Your 3 New Pinterest Pin Designs",
+f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE' for new designs, or 'SKIP' to discard.",
+imgs
+)
+print("Sent 3 Pin designs to Gmail for approval!")
+if name == "main": main()
