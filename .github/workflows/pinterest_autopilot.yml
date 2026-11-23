@@ -2,7 +2,7 @@ name: Pinterest Autonomous Growth & Sales Agent
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -28,14 +28,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.geminikey }}
           GMAIL_USER: ${{ secrets.gmailuser }}
           GMAIL_APP_PASSWORD: ${{ secrets.gmailpass }}
-          PINTEREST_ACCESS_TOKEN: ${{ secrets.pintoken }}
-          PINTEREST_ENV: "production"
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: python main.py
 
-      - name: Save agent state back to repo
+      - name: Save agent state & RSS feed back to repo
         run: |
           git config user.name "Pinterest-Growth-Bot"
           git config user.email "bot@://github.com"
           git add -A
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update agent state" && git push)
-          
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update agent state & RSS feed" && git push)
