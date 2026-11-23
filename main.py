@@ -220,11 +220,44 @@ def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: s
         "media_source": {"source_type": "image_base64", "content_type": "image/png", "data": b64}
     }
     return requests.post(f"{base}/pins", headers=headers, json=payload, timeout=30).json()
+def publish_pin(image_path: str, title: str, desc: str, link: str, board_name: str):
+    base = "https://api-sandbox" + "://" if PIN_ENV == "sandbox" else "https://api" + "://"
+    headers = {"Authorization": f"Bearer {PIN_TOKEN}", "Content-Type": "application/json"}
+    r = requests.get(f"{base}/boards", headers=headers, timeout=20)
+    board_id = None
+    if r.status_code == 200:
+        for b in r.json().get("items", []):
+            if b.get("name", "").lower() == board_name.lower():
+                board_id = b.get("id")
+                break
+    if not board_id:
+        cr = requests.post(f"{base}/boards", headers=headers, json={"name": board_name, "privacy": "PUBLIC"}, timeout=20)
+        cr_json = cr.json()
+        print("Board creation response:", cr_json)
+        board_id = cr_json.get("id")
+    if not board_id:
+        raise RuntimeError(f"Could not get/create Pinterest board. API response: {r.text}")
+
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    payload = {
+        "board_id": board_id,
+        "title": title[:100],
+        "description": desc[:500],
+        "link": link,
+        "media_source": {"source_type": "image_base64", "content_type": "image/png", "data": b64}
+    }
+    res = requests.post(f"{base}/pins", headers=headers, json=payload, timeout=30)
+    res_json = res.json()
+    print("Pinterest API status:", res.status_code, res_json)
+    if res.status_code not in (200, 201):
+        raise RuntimeError(f"Pinterest publish failed ({res.status_code}): {res_json}")
+    return res_json
 
 def main():
     print("Starting Autonomous Pinterest Growth & Sales Agent...")
-    if not GEMINI_KEY or not GMAIL_USER or not GMAIL_PASS:
-        raise RuntimeError(f"Missing secret! GEMINI_KEY={bool(GEMINI_KEY)}, GMAIL_USER={bool(GMAIL_USER)}, GMAIL_PASS={bool(GMAIL_PASS)}")
+    if not GEMINI_KEY or not GMAIL_USER or not GMAIL_PASS or not PIN_TOKEN:
+        raise RuntimeError(f"Missing secret! GEMINI_KEY={bool(GEMINI_KEY)}, GMAIL_USER={bool(GMAIL_USER)}, GMAIL_PASS={bool(GMAIL_PASS)}, PIN_TOKEN={bool(PIN_TOKEN)}")
     product = get_product()
     if not product:
         print("Waiting for product approval via Gmail.")
@@ -237,13 +270,22 @@ def main():
         if not reply:
             print("Waiting for APPROVE 1/2/3 reply in Gmail.")
             return
-        up = reply.upper()
-        if "REJECT" in up:
+        clean_lines = []
+        for line in reply.splitlines():
+            if line.strip().startswith(">") or (line.strip().startswith("On ") and "wrote:" in line):
+                break
+            if line.strip():
+                clean_lines.append(line.strip())
+        up = " ".join(clean_lines).upper()
+        print("Detected Gmail reply:", up)
+
+        if "SKIP" in up or "CANCEL" in up:
             os.remove(PENDING_FILE)
-            print("Draft rejected.")
+            print("Draft skipped.")
             return
         if "REGENERATE" in up:
             os.remove(PENDING_FILE)
+            print("Regenerating fresh Pin draft...")
         else:
             choice = 1
             for n in (1, 2, 3):
@@ -255,7 +297,7 @@ def main():
                 if not os.path.exists(img):
                     make_pins(draft["headline"], draft["subtext"])
                 res = publish_pin(img, draft["title"], draft["description"], draft["link"], draft["board"])
-                print("Published Pin:", res)
+                print("SUCCESS! Published Pin to Pinterest:", res)
                 os.remove(PENDING_FILE)
                 return
 
@@ -272,10 +314,9 @@ def main():
         json.dump(draft, f)
     send_email(
         "PIN-APPROVAL: Review Your 3 New Pinterest Pin Designs",
-f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE', or 'REJECT'.",
-imgs
-)
-print("Sent 3 Pin designs to Gmail for approval!")
+        f"Board: {draft['board']}\nTitle: {draft['title']}\nDescription: {draft['description']}\nLink: {draft['link']}\n\nReply 'APPROVE 1', 'APPROVE 2', or 'APPROVE 3' to publish, 'REGENERATE' for new designs, or 'SKIP' to discard.",
+        imgs
+    )
+    print("Sent 3 Pin designs to Gmail for approval!")
+
 if __name__ == "__main__": main()
-main()
-        
